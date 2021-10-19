@@ -64,6 +64,7 @@ bevy_pen_tool, in its current form,
 - does not work with a Perspective Camera (only Orthographic)
 - cannot save multiple groups at once, only a single one
 - deletes everything on the canvas before loading a group of Bezier curves
+- spawns entities at z-positions between -10000 and 10 (this will change in future versions)
 
 
 
