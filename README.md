@@ -37,7 +37,7 @@ A Bevy Engine plugin for making 2D paths, smooth animations, meshes and roads wi
 
 
 ## Setup
-Clone the repo, copy and paste the crate called "bevy_pen_tool_plugin" from the "crates" folder in the repo to the directory for your project, and add "bevy_pen_tool_plugin" as a local dependency in Cargo.toml. Refer to main.rs and Cargo.toml for futher details.
+Clone the repo, copy and paste the crate called "bevy_pen_tool_plugin" from the "crates" folder in the repo to the directory for your project, and add "bevy_pen_tool_plugin" as a local dependency in Cargo.toml. The assets are currently in the wrong directory; they soon will be located in the bevy_pen_tool_plugin. Refer to main.rs and Cargo.toml for futher details.
 
 ## How to
 A typical sequence of actions using the plugin would be as follows:
