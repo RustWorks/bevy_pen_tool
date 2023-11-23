@@ -1,223 +1,415 @@
-use crate::inputs::*;
+use crate::actions::*;
+use crate::io::{load, load_mesh, save};
 use crate::moves::*;
-use crate::spawner::*;
-use crate::util::*;
+use crate::pen::*;
+use crate::undo::*;
 
-use bevy::{
-    prelude::*,
-    render::{
-        pipeline::PipelineDescriptor,
-        render_graph::{base, AssetRenderResourcesNode, RenderGraph},
-        shader::ShaderStages,
-    },
-};
+use bevy::prelude::*;
+use bevy_obj::*;
+use bevy_pen_tool_model::*;
+pub struct BevyPenToolPlugin;
 
-use std::{thread, time};
+// use bevy::render::{render_graph::RenderGraph, RenderApp};
+// use bevy::window::{CreateWindow, WindowId};
+// use bevy_inspector_egui::InspectorPlugin;
+// use once_cell::sync::Lazy;
 
-pub struct PenPlugin;
+// TODO
 
-impl Plugin for PenPlugin {
+// 0) unlatch bezier that is part of group
+// 7) automatically group latched curves --
+//      every chain is a group, even when it is just one curve
+//      unlatching produces two new groups
+
+// 1) use UI camera
+// 2) disable and hide color picking
+// 5) disable shortcuts
+// 6) make most of the structs public(crate) and
+//     leave only the API public
+// 8) fix save all
+// 9) move structs in correct files (ex: RoadMesh, FillMesh in mesh)
+// 10) wrong unselect when moving a selected mesh
+// 11) make io a feature
+// 12) replace middle quads with line segments
+
+// 13) scale meshes
+// 14) no_std
+
+impl Plugin for BevyPenToolPlugin {
     fn build(&self, app: &mut App) {
-        app.add_asset::<MyShader>()
-            .add_asset::<Bezier>()
-            .add_asset::<Group>()
-            .add_event::<MouseClickEvent>()
-            .add_event::<Group>()
-            .add_event::<OfficialLatch>()
-            .add_event::<MoveAnchor>()
-            .add_event::<Latch>()
-            .add_event::<Loaded>()
-            .add_event::<Action>()
-            .add_event::<UiButton>()
-            .add_event::<Handle<Group>>()
-            .add_state("ModelViewController")
-            .insert_resource(ClearColor(Color::hex("6e7f80").unwrap()))
-            .insert_resource(Cursor::default())
-            .insert_resource(Globals::default())
-            .insert_resource(Selection::default())
-            .insert_resource(Maps::default())
-            .insert_resource(UserState::default())
-            .add_startup_system(setup.exclusive_system().at_start()) //.label("setup"))
-            .add_startup_system(spawn_selection_bounding_box) //.after("setup"))
-            .add_startup_system(spawn_ui) //.after("setup"))
-            .add_startup_system(spawn_selecting_bounding_box) //.after("setup"))
+        app.add_plugin(PenApiPlugin)
+            .add_plugin(ObjPlugin)
+            .add_plugin(SpawnerPlugin)
+            .add_event::<RemoveMovingQuadEvent>()
+            .add_event::<GroupBoxEvent>()
+            .add_event::<SpawningCurve>()
+            .add_event::<SpawnCurve>()
+            .add_event::<UnlatchEvent>()
+            .insert_resource(History::default())
+            .add_startup_system(set_window_position)
             //
-            // Update controller
-            .add_system_set(
-                SystemSet::on_update("ModelViewController")
-                    .with_system(record_mouse_events_system.exclusive_system().at_start())
-                    .with_system(check_mouseclick_on_objects)
-                    .with_system(rescale)
-                    .with_system(check_mouse_on_ui)
-                    .with_system(pick_color)
-                    .with_system(check_mouse_on_canvas)
-                    .with_system(spawn_curve_order_on_mouseclick)
-                    .with_system(button_system)
-                    .with_system(toggle_ui_button)
-                    .with_system(send_action.exclusive_system().at_end())
-                    .label("controller"),
-            )
+            .add_system(debug)
+            .add_system(remove_all_moving_quad)
+            .add_system(check_mouse_on_meshes)
+            .add_system(unlatchy)
+            .add_system(compute_group_lut)
+            .add_system(load_mesh)
             //
             // Update model
             .add_system_set(
                 SystemSet::on_update("ModelViewController")
-                    .with_system(groupy.label("group"))
-                    .with_system(load.after("group"))
-                    .with_system(recompute_lut.label("recompute_lut"))
-                    .with_system(save.after("recompute_lut"))
-                    .with_system(change_ends_and_controls_params.exclusive_system().at_end())
+                    // .with_system(groupy)
+                    // .with_system(ungroupy)
                     .with_system(latchy)
+                    .with_system(update_lut)
                     .with_system(officiate_latch_partnership)
                     .with_system(selection_box_init)
-                    .with_system(selection_final)
+                    .with_system(selection_area_finalize)
                     .with_system(hide_anchors)
                     .with_system(delete)
                     .with_system(hide_control_points)
-                    .with_system(spawn_heli)
-                    .with_system(make_mesh)
-                    .with_system(make_road)
                     .with_system(unselect)
-                    .label("model")
-                    .after("controller"),
+                    .with_system(undo)
+                    .with_system(redo)
+                    .with_system(redo_effects)
+                    .with_system(add_to_history)
+                    .with_system(update_anchors.exclusive_system().at_end())
+                    .label("model"),
+            )
+            .add_system_set(
+                SystemSet::on_update("ModelViewController")
+                    .with_system(load)
+                    .with_system(save)
+                    .after("model"),
             )
             //
             // Update view
             .add_system_set(
                 SystemSet::on_update("ModelViewController")
-                    // TODO:
-                    // mouse_release_actions should be in the controller,
-                    // but there is a bug with the position of new latches when it's there
-                    .with_system(mouse_release_actions)
-                    //
-                    .with_system(begin_move_on_mouseclick)
+                    .with_system(bezier_anchor_order)
                     .with_system(move_end_quads)
                     .with_system(move_middle_quads)
                     .with_system(move_group_middle_quads)
                     .with_system(move_control_quads)
                     .with_system(move_bb_quads)
                     .with_system(move_ui)
+                    .with_system(move_mesh)
                     .with_system(turn_round_animation)
                     .with_system(follow_bezier_group)
-                    .with_system(adjust_selection_attributes)
-                    .with_system(adjust_selecting_attributes)
-                    .with_system(adjust_group_attributes)
-                    .with_system(spawn_bezier_system)
-                    .with_system(spawn_group_middle_quads)
-                    .with_system(spawn_group_bounding_box)
                     .label("view")
+                    // .with_system(rescale)
                     .after("model"),
             );
+
+        // ///////////////////////// inspector
+
+        // app.add_plugin(InspectorPlugin::<History>::new())
+        //     .add_plugin(InspectorPlugin::<HistoryInspector>::new().on_window(*SECOND_WINDOW_ID))
+        //     .add_plugin(InspectorPlugin::<HistoryLenInspector>::new().on_window(*SECOND_WINDOW_ID))
+        //     .insert_resource(HistoryInspector::default())
+        //     .insert_resource(HistoryLenInspector::default())
+        //     .add_startup_system(create_new_window)
+        //     .add_system(update_history_inspector);
+
+        // let render_app = app.sub_app_mut(RenderApp);
+        // let mut graph = render_app.world.get_resource_mut::<RenderGraph>().unwrap();
+        // bevy_egui::setup_pipeline(
+        //     &mut graph,
+        //     bevy_egui::RenderGraphConfig {
+        //         window_id: *SECOND_WINDOW_ID,
+        //         egui_pass: SECONDARY_EGUI_PASS,
+        //     },
+        // );
+
+        // ///////////////////////// inspector
     }
 }
 
-fn setup(
-    // mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut pipelines: ResMut<Assets<PipelineDescriptor>>,
-    mut render_graph: ResMut<RenderGraph>,
-    mut maps: ResMut<Maps>,
+pub fn remove_all_moving_quad(
+    mut commands: Commands,
+    mut events: EventReader<RemoveMovingQuadEvent>,
+    mut query: Query<(Entity, &MovingAnchor)>,
 ) {
-    asset_server.watch_for_changes().unwrap();
-
-    let latch_sound: Handle<AudioSource> = asset_server.load("sounds/latch.mp3");
-    let unlatch_sound: Handle<AudioSource> = asset_server.load("sounds/unlatch.mp3");
-    let group_sound: Handle<AudioSource> = asset_server.load("sounds/group.mp3");
-
-    maps.sounds.insert("latch", latch_sound);
-    maps.sounds.insert("unlatch", unlatch_sound);
-    maps.sounds.insert("group", group_sound);
-
-    let frag = asset_server.load::<Shader, _>("shaders/bezier.frag");
-    let vert = asset_server.load::<Shader, _>("shaders/bezier.vert");
-    let ends = asset_server.load::<Shader, _>("shaders/ends.frag");
-    let button = asset_server.load::<Shader, _>("shaders/button.frag");
-    let frag_bb = asset_server.load::<Shader, _>("shaders/bounding_box.frag");
-    let selecting = asset_server.load::<Shader, _>("shaders/selecting.frag");
-    let controls_frag = asset_server.load::<Shader, _>("shaders/controls.frag");
-
-    let hundred_millis = time::Duration::from_millis(100);
-    thread::sleep(hundred_millis);
-
-    render_graph.add_system_node(
-        "my_shader_params",
-        AssetRenderResourcesNode::<MyShader>::new(true),
-    );
-    render_graph
-        .add_node_edge("my_shader_params", base::node::MAIN_PASS)
-        .unwrap();
-
-    let ends_pipeline_handle = pipelines.add(PipelineDescriptor::default_config(ShaderStages {
-        vertex: vert.clone(),
-        fragment: Some(ends.clone()),
-    }));
-
-    let mids_pipeline_handle = pipelines.add(PipelineDescriptor::default_config(ShaderStages {
-        vertex: vert.clone(),
-        fragment: Some(frag.clone()),
-    }));
-
-    let controls_pipeline_handle =
-        pipelines.add(PipelineDescriptor::default_config(ShaderStages {
-            vertex: vert.clone(),
-            fragment: Some(controls_frag.clone()),
-        }));
-
-    let bb_pipeline_handle = pipelines.add(PipelineDescriptor::default_config(ShaderStages {
-        vertex: vert.clone(),
-        fragment: Some(frag_bb),
-    }));
-
-    let selecting_handle = pipelines.add(PipelineDescriptor::default_config(ShaderStages {
-        vertex: vert.clone(),
-        fragment: Some(selecting),
-    }));
-
-    let button_pipeline_handle = pipelines.add(PipelineDescriptor::default_config(ShaderStages {
-        vertex: vert.clone(),
-        fragment: Some(button),
-    }));
-
-    let mesh_handle_ends_controls = meshes.add(Mesh::from(shape::Quad {
-        size: Vec2::new(4.0, 4.0),
-        flip: false,
-    }));
-
-    let mesh_handle_ends = meshes.add(Mesh::from(shape::Quad {
-        size: Vec2::new(2.0, 4.0),
-        flip: false,
-    }));
-
-    let mesh_handle_middle = meshes.add(Mesh::from(shape::Quad {
-        size: Vec2::new(1.5, 1.5),
-        flip: false,
-    }));
-
-    let mesh_handle_button = meshes.add(Mesh::from(shape::Quad {
-        size: Vec2::new(3.0, 3.0),
-        flip: false,
-    }));
-
-    maps.pipeline_handles.insert("ends", ends_pipeline_handle);
-    maps.pipeline_handles
-        .insert("controls", controls_pipeline_handle);
-    maps.pipeline_handles.insert("mids", mids_pipeline_handle);
-    maps.pipeline_handles
-        .insert("button", button_pipeline_handle);
-
-    maps.pipeline_handles
-        .insert("bounding_box", bb_pipeline_handle);
-
-    maps.pipeline_handles.insert("selecting", selecting_handle);
-
-    maps.mesh_handles.insert("middles", mesh_handle_middle);
-
-    maps.mesh_handles.insert("ends", mesh_handle_ends);
-
-    maps.mesh_handles
-        .insert("ends_controls", mesh_handle_ends_controls);
-
-    maps.mesh_handles.insert("button", mesh_handle_button);
-
-    thread::sleep(hundred_millis);
+    for _ in events.iter() {
+        for (entity, _anchor) in query.iter_mut() {
+            commands.entity(entity).remove::<MovingAnchor>();
+        }
+    }
 }
+
+fn set_window_position(mut windows: ResMut<Windows>) {
+    for window in windows.iter_mut() {
+        window.set_position(IVec2::new(0, 0));
+    }
+}
+
+//////////////////////////// Debugging ////////////////////////////
+use std::collections::HashMap;
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+struct BezierPrint {
+    pub positions: BezierPositions,
+    pub previous_positions: BezierPositions,
+    // pub move_quad: Anchor,
+    pub color: Option<Color>,
+    pub do_compute_lut: bool,
+    pub id: BezierId,
+    pub latches: HashMap<AnchorEdge, LatchData>,
+    pub potential_latch: Option<LatchData>,
+    pub grouped: bool,
+}
+
+impl BezierPrint {
+    #[allow(dead_code)]
+    pub fn from_bezier(bezier: &Bezier) -> Self {
+        Self {
+            positions: bezier.positions.clone(),
+            previous_positions: bezier.positions.clone(),
+            // move_quad: bezier.move_quad,
+            color: None,
+            do_compute_lut: false,
+            id: bezier.id,
+            latches: bezier.latches.clone(),
+            potential_latch: None,
+            grouped: false,
+        }
+    }
+}
+
+use std::collections::HashSet;
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+struct GroupPrint {
+    // TODO: rid Group of redundancy
+    pub group: HashSet<(Entity, Handle<Bezier>)>,
+    pub bezier_handles: HashSet<Handle<Bezier>>,
+    //
+    // Attempts to store the start and end points of a group.
+    // Fails if curves are not connected
+    pub ends: Option<Vec<(Handle<Bezier>, AnchorEdge)>>,
+}
+
+impl GroupPrint {
+    #[allow(dead_code)]
+    pub fn from_group(group: &Group) -> Self {
+        Self {
+            group: group.group.clone(),
+            bezier_handles: group.bezier_handles.clone(),
+            ends: group.ends.clone(),
+        }
+    }
+}
+
+// static SECOND_WINDOW_ID: Lazy<WindowId> = Lazy::new(WindowId::new);
+// const SECONDARY_EGUI_PASS: &str = "secondary_egui_pass";
+
+// fn update_history_inspector(
+//     history: ResMut<History>,
+//     mut history_inspector: ResMut<HistoryInspector>,
+//     mut history_len_inspector: ResMut<HistoryLenInspector>,
+// ) {
+//     if history.is_changed() {
+//         *history_inspector = HistoryInspector::from(history.clone());
+//         history_len_inspector.length = history_inspector.history.len();
+//         history_len_inspector.index = history_inspector.index;
+//     }
+// }
+
+// fn create_new_window(mut create_window_events: EventWriter<CreateWindow>) {
+//     let window_id = *SECOND_WINDOW_ID;
+
+//     create_window_events.send(CreateWindow {
+//         id: window_id,
+//         descriptor: WindowDescriptor {
+//             width: 800.,
+//             height: 600.,
+//             position: WindowPosition::At(Vec2::new(1350., 0.)),
+//             title: "Second window".to_string(),
+//             ..Default::default()
+//         },
+//     });
+// }
+
+// pub fn compute_group_lut(
+//     // mut commands: Commands,
+//     bezier_curves: Res<Assets<Bezier>>,
+//     mut groups: ResMut<Assets<Group>>,
+//     mut group_lut_event_reader: EventReader<ComputeGroupLut>,
+//     maps: Res<Maps>,
+//     globals: Res<Globals>,
+// ) {
+//     for group_lut_event in group_lut_event_reader.iter() {
+//         if let Some(group_handle) = maps.group_map.get(&group_lut_event.0) {
+//             let group = groups.get_mut(group_handle).unwrap();
+
+//             let bezier_assets = bezier_curves
+//                 .iter()
+//                 .collect::<HashMap<bevy::asset::HandleId, &Bezier>>();
+
+//             group.find_connected_ends(&bezier_assets, maps.bezier_map.clone());
+//             group.group_lut(&bezier_assets, maps.bezier_map.clone());
+//             group.compute_standalone_lut(&bezier_assets, globals.group_lut_num_points);
+//             println!("group lut computed");
+//         }
+//     }
+// }
+
+fn debug(
+    keyboard_input: Res<Input<KeyCode>>,
+    query: Query<&Handle<Bezier>, With<BezierParent>>,
+    bezier_curves: ResMut<Assets<Bezier>>,
+    maps: Res<Maps>,
+    globals: Res<Globals>,
+    mut groups: ResMut<Assets<Group>>,
+    // mids_groups: Query<&GroupMiddleQuad>,
+    // maps: Res<Maps>,
+    // history: Res<History>,
+    // mut action_event_writer: EventWriter<Action>,
+) {
+    if keyboard_input.just_pressed(KeyCode::B)
+        && !keyboard_input.pressed(KeyCode::LShift)
+        && !keyboard_input.pressed(KeyCode::LControl)
+    {
+        // println!("group_handles: {:?}", maps.id_group_handle);
+        // println!("'B' currently pressed");
+        // let latches: Vec<Latch> = vec![];
+        for _handle in query.iter() {
+            // let bezier = bezier_curves.get_mut(handle).unwrap();
+            // action_event_writer.send(Action::ComputeLut);
+
+            // latches.push()
+
+            // println!("group id: {:?}", bezier.group);
+            // println!("latches: {:#?}", BezierPrint::from_bezier(bezier).latches);
+            // println!("potential latche: {:#?}", bezier.potential_latch);
+        }
+
+        // println!("mids: {:?}", mids_groups.iter().count());
+        // println!("history actions: {:#?}", history.actions);
+        // println!("history actions len: {:#?}", history.actions.len());
+        // println!("history index: {:?}", history.index);
+        // println!("map: {:?}", maps.print_bezier_map());
+        // println!("");
+    }
+
+    if keyboard_input.just_pressed(KeyCode::G) {
+        // println!("'B' currently pressed");
+        println!("groups: {:#?}", groups.iter().count());
+        println!("group map: {:?}", maps.group_map);
+        for (_, group) in groups.iter_mut() {
+            // let bezier = bezier_curves.get_mut(handle).unwrap();
+
+            let bezier_assets = bezier_curves
+                .iter()
+                .collect::<HashMap<bevy::asset::HandleId, &Bezier>>();
+
+            group.find_connected_ends(&bezier_assets, maps.bezier_map.clone());
+            group.group_lut(&bezier_assets, maps.bezier_map.clone());
+            group.compute_standalone_lut(&bezier_assets, globals.group_lut_num_points);
+
+            // println!("group: {:#?}", GroupPrint::from_group(group));
+            // println!("");
+        }
+    }
+}
+//////////////////////////// Debugging ////////////////////////////
+
+// const P1: Vec2 = Vec2::new(0.0, 0.0);
+// const P2: Vec2 = Vec2::new(0.0, 0.0);
+// const P3: Vec2 = Vec2::new(0.0, 0.0);
+// const P4: Vec2 = Vec2::new(0.0, 0.0);
+// const P5: Vec2 = Vec2::new(0.0, 0.0);
+// const P6: Vec2 = Vec2::new(0.0, 0.0);
+// const P7: Vec2 = Vec2::new(0.0, 0.0);
+// const P8: Vec2 = Vec2::new(0.0, 0.0);
+
+// pub fn first_test() {
+//     // Setup app
+//     let mut app = App::new();
+
+//     app.add_plugins(DefaultPlugins);
+//     app.add_plugin(BevyPenToolPlugin);
+
+//     // Add Score resource
+
+//     // Add helper system to access bezier curves
+//     // (can't access assets through world directly)
+//     // app.add_system(update_bez);
+
+//     // Run systems once
+//     app.update();
+
+//     // // TODO: here, we have to create related systems that will do the logic PenCommands,
+//     // // but we can enter the actual values here inside the #[test]
+
+//     let mut pen_commands = app.world.get_resource_mut::<PenCommandVec>().unwrap();
+//     // initiate a BezierPositions
+//     let mut positions1 = BezierPositions {
+//         start: Vec2::new(200., -100.),
+//         end: Vec2::new(100., 100.),
+//         control_start: Vec2::new(0., 100.),
+//         control_end: Vec2::new(100., 100.),
+//     };
+
+//     let id1 = pen_commands.spawn(positions1);
+
+//     let positions2 = BezierPositions {
+//         start: Vec2::ZERO,
+//         end: Vec2::new(-100., -100.),
+//         control_start: Vec2::new(0., -100.),
+//         control_end: Vec2::new(100., -200.),
+//     };
+
+//     let id2 = pen_commands.spawn(positions2);
+
+//     app.update();
+
+//     let mut pen_commands = app.world.get_resource_mut::<PenCommandVec>().unwrap();
+//     pen_commands.move_anchor(id1, Anchor::Start, Vec2::ZERO);
+
+//     positions1 = BezierPositions {
+//         start: Vec2::ZERO,
+//         end: Vec2::new(100., 100.),
+//         control_start: Vec2::new(0., 100.) - Vec2::new(200., -100.), // moves with start
+//         control_end: Vec2::new(100., 100.),
+//     };
+
+//     pen_commands.latch(
+//         CurveIdEdge {
+//             id: id1,
+//             anchor_edge: AnchorEdge::Start,
+//         },
+//         CurveIdEdge {
+//             id: id2,
+//             anchor_edge: AnchorEdge::Start,
+//         },
+//     );
+
+//     pen_commands.unlatch(
+//         CurveIdEdge {
+//             id: id1,
+//             anchor_edge: AnchorEdge::Start,
+//         },
+//         CurveIdEdge {
+//             id: id2,
+//             anchor_edge: AnchorEdge::Start,
+//         },
+//     );
+
+//     let mut target_positions = app.world.get_resource_mut::<TargetPositions>().unwrap();
+
+//     target_positions.0.insert(id1, positions1);
+//     target_positions.0.insert(id2, positions2);
+
+//     app.update();
+
+//     // let bezier_curves = app.world.resource::<BezierTestHashed>();
+//     // let target_positions = app.world.resource::<TargetPositions>();
+
+//     // for (id, target_pos) in target_positions.0.iter() {
+//     //     let bezier = bezier_curves.0.get(&id).unwrap();
+//     //     let bezier_state = BezierState::from(bezier);
+//     //     assert_eq!(&bezier_state.positions, target_pos);
+//     // }
+// }

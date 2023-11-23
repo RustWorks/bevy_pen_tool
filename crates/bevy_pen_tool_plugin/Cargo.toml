@@ -1,19 +1,100 @@
 [package]
 name = "bevy_pen_tool_plugin"
-version = "0.2.0"
-edition = "2018"
+version = "0.3.0"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bevy = { version = "0.5", git = "https://github.com/bevyengine/bevy", rev="099386f184901b4fe1183f619f301a668abe5672", default-features = true }
+# bevy = { git = "https://github.com/bevyengine/bevy", rev = "6a1ba9c" }
+bevy = "0.8"
+bevy_pen_tool_model = {path = "crates/bevy_pen_tool_model"}
 
 flo_curves = "0.5"
 serde_json = "1.0.59"
 itertools = "0.10.1"
 serde = { version = "1", features = ["derive"] }
-rand = "0.8.0"
+rand = "0.8"
 plotlib = "0.5.1"
 lyon = "0.17.5"
 obj-exporter = "0.2.0"
 rfd = "0.5.1"
+bevy-inspector-egui = "0.12"
+once_cell = "1.13.0"
+bevy_egui = "0.15"
+bevy_obj = "0.8"
+
+
+[[example]]
+name = "blank"
+path = "examples/blank.rs"
+
+[[example]]
+name = "breakout"
+path = "examples/breakout.rs"
+
+[[example]]
+name = "move_test"
+path = "examples/move_test.rs"
+
+[[example]]
+name = "latch_test"
+path = "examples/latch_test.rs"
+
+[[example]]
+name = "unlatch_test"
+path = "examples/unlatch_test.rs"
+
+[[example]]
+name = "delete_test"
+path = "examples/delete_test.rs"
+
+[[example]]
+name = "complex_test1"
+path = "examples/complex_test1.rs"
+
+[[example]]
+name = "latch_then_delete_test"
+path = "examples/latch_then_delete_test.rs"
+
+[[example]]
+name = "undo_latch_test"
+path = "examples/undo_latch_test.rs"
+
+[[example]]
+name = "undo_move_test"
+path = "examples/undo_move_test.rs"
+
+[[example]]
+name = "undo_unlatch_test"
+path = "examples/undo_unlatch_test.rs"
+
+[[example]]
+name = "redo_latch_test"
+path = "examples/redo_latch_test.rs"
+
+[[example]]
+name = "redo_delete_test"
+path = "examples/redo_delete_test.rs"
+
+[[example]]
+name = "redo_move_test"
+path = "examples/redo_move_test.rs"
+
+[[example]]
+name = "redo_unlatch_test"
+path = "examples/redo_unlatch_test.rs"
+
+[[example]]
+name = "undo_delete_latched_test"
+path = "examples/undo_delete_latched_test.rs"
+
+[[example]]
+name = "redo_delete_latched_test"
+path = "examples/redo_delete_latched_test.rs"
+
+
+[[example]]
+name = "undo_latch_then_move_test"
+path = "examples/undo_latch_then_move_test.rs"
+

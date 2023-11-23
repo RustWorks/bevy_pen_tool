@@ -17,6 +17,13 @@ use bevy::{prelude::*, render::camera::OrthographicProjection};
 
 fn main() {
     App::new()
+        .insert_resource(WindowDescriptor {
+            title: "pen".to_string(),
+            width: 1200.,
+            height: 800.,
+            // vsync: true,
+            ..Default::default()
+        })
         .add_plugins(DefaultPlugins)
         .add_plugin(CamPlugin)
         .add_startup_system(camera_setup)
@@ -29,16 +36,16 @@ fn camera_setup(mut commands: Commands, mut globals: ResMut<Globals>) {
     //
     // bevy_pen_tool is not compatible with a Perspective Camera
     commands
-        .spawn_bundle(OrthographicCameraBundle {
-            transform: Transform::from_translation(Vec3::new(00.0, 0.0, 10.0))
+        .spawn_bundle(Camera2dBundle {
+            transform: Transform::from_translation(Vec3::new(00.0, 0.0, 1.0))
                 .looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y),
-            orthographic_projection: OrthographicProjection {
-                scale: 0.19,
+            projection: OrthographicProjection {
+                scale: 1.0,
                 far: 100000.0,
                 near: -100000.0,
                 ..Default::default()
             },
-            ..OrthographicCameraBundle::new_2d()
+            ..Default::default()
         })
         .insert(Cam::default());
 

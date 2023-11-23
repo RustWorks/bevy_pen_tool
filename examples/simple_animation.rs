@@ -46,16 +46,16 @@ fn main() {
 fn camera_setup(mut commands: Commands) {
     //
     // bevy_pen_tool is not compatible with Perspective Cameras
-    commands.spawn_bundle(OrthographicCameraBundle {
+    commands.spawn_bundle(Camera2dBundle {
         transform: Transform::from_translation(Vec3::new(00.0, 0.0, 10.0))
             .looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y),
-        orthographic_projection: OrthographicProjection {
-            scale: 0.20,
+        projection: OrthographicProjection {
+            scale: 0.19,
             far: 100000.0,
             near: -100000.0,
             ..Default::default()
         },
-        ..OrthographicCameraBundle::new_2d()
+        ..Default::default()
     });
 }
 
@@ -66,9 +66,13 @@ fn spawn_quad(mut commands: Commands, mut materials: ResMut<Assets<ColorMaterial
     // spawn sprite that will be animated
     commands
         .spawn_bundle(SpriteBundle {
-            material: materials.add(Color::rgb(0.5, 0.5, 1.0).into()),
+            // material: materials.add(Color::rgb(0.5, 0.5, 1.0).into()),
             transform: Transform::from_xyz(0.0, -0.0, 0.0),
-            sprite: Sprite::new(Vec2::new(10.0, 10.0)),
+            sprite: Sprite {
+                color: Color::BLACK,
+                custom_size: Some(Vec2::new(10.0, 10.0)),
+                ..Default::default()
+            },
 
             ..Default::default()
         })
@@ -78,9 +82,14 @@ fn spawn_quad(mut commands: Commands, mut materials: ResMut<Assets<ColorMaterial
     // show points from look-up table
     for position in lut.lut.iter() {
         commands.spawn_bundle(SpriteBundle {
-            material: materials.add(Color::rgb(0.7, 0.5, 1.0).into()),
+            // material: materials.add(Color::rgb(0.7, 0.5, 1.0).into()),
             transform: Transform::from_translation(position.extend(-50.0)),
-            sprite: Sprite::new(Vec2::new(1.0, 1.0)),
+            // sprite: Sprite::new(Vec2::new(1.0, 1.0)),
+            sprite: Sprite {
+                color: Color::GREEN,
+                custom_size: Some(Vec2::new(1.0, 1.0)),
+                ..Default::default()
+            },
 
             ..Default::default()
         });

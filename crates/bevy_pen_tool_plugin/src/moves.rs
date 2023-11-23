@@ -1,15 +1,19 @@
-use crate::inputs::Cursor;
-use crate::util::{
-    AnchorEdge, Bezier, BoundingBoxQuad, ControlPointQuad, EndpointQuad, FollowBezierAnimation,
-    Globals, GrandParent, Group, GroupMiddleQuad, MiddlePointQuad, MyShader, TurnRoundAnimation,
-    UiAction, UiBoard,
+use bevy::math::Vec3A;
+use bevy::prelude::*;
+use bevy_pen_tool_model::inputs::Cursor;
+use bevy_pen_tool_model::materials::{BezierMidMat, SelectionMat};
+use bevy_pen_tool_model::mesh::{FillMesh2dMaterial, RoadMesh2dMaterial, StartMovingMesh};
+use bevy_pen_tool_model::model::{
+    AchorEdgeQuad, AnchorEdge, Bezier, BezierParent, BoundingBoxQuad, ControlPointQuad,
+    FollowBezierAnimation, Globals, Group, GroupMiddleQuad, MainUi, MiddlePointQuad, MovingAnchor,
+    TurnRoundAnimation, UiAction, UiBoard,
 };
 
-use bevy::prelude::*;
+use std::collections::HashMap;
 
 pub fn move_ui(
     cursor: ResMut<Cursor>,
-    mut ui_query: Query<(&mut Transform, &mut UiBoard), With<GrandParent>>,
+    mut ui_query: Query<(&mut Transform, &mut UiBoard), With<MainUi>>,
 ) {
     for (mut transform, ui_board) in ui_query.iter_mut() {
         //
@@ -25,9 +29,9 @@ pub fn move_ui(
 pub fn move_middle_quads(
     time: Res<Time>,
     bezier_curves: ResMut<Assets<Bezier>>,
-    mut my_shader_params: ResMut<Assets<MyShader>>,
+    mut my_shader_params: ResMut<Assets<BezierMidMat>>,
     mut query: Query<
-        (&mut GlobalTransform, &Handle<Bezier>, &Handle<MyShader>),
+        (&mut Transform, &Handle<Bezier>, &Handle<BezierMidMat>),
         With<MiddlePointQuad>,
     >,
     globals: ResMut<Globals>,
@@ -52,21 +56,14 @@ pub fn move_middle_quads(
                 let t_time = (t as f64 + time.seconds_since_startup() * 0.1) % 1.0;
                 shader_params.t = t_time as f32;
 
-                // let idx_f64 = t_time * (bezier.lut.len() - 1) as f64;
-                // let p1 = bezier.lut[(idx_f64 as usize)];
-                // let p2 = bezier.lut[idx_f64 as usize + 1];
-                // //
-                // // TODO: is the minus one useful here?
-                // let rem = (idx_f64 - 1.0) % 1.0;
-                // let t_distance = interpolate(p1, p2, rem);
-
                 use flo_curves::bezier::BezierCurve;
 
                 let t_distance = bezier.compute_real_distance(t_time);
                 let pos = curve.point_at_pos(t_distance);
 
-                transform.translation.x = pos.0 as f32;
-                transform.translation.y = pos.1 as f32;
+                let z = transform.translation.z;
+
+                transform.translation = Vec3::new(pos.0 as f32, pos.1 as f32, z);
             }
         }
     }
@@ -74,21 +71,37 @@ pub fn move_middle_quads(
 
 pub fn move_group_middle_quads(
     time: Res<Time>,
-    bezier_curves: ResMut<Assets<Bezier>>,
-    mut my_shader_params: ResMut<Assets<MyShader>>,
+    bezier_curves: Res<Assets<Bezier>>,
+    mut my_shader_params: ResMut<Assets<BezierMidMat>>,
     mut query: Query<(
-        &mut GlobalTransform,
+        &mut Transform,
         &Handle<Group>,
-        &Handle<MyShader>,
+        &Handle<BezierMidMat>,
         &GroupMiddleQuad,
     )>,
     // globals: ResMut<Globals>,
     groups: ResMut<Assets<Group>>,
+    // mut action_event_reader: EventReader<Action>,
+    // mut latch_event_reader: EventReader<OfficialLatch>,
 ) {
     let mut t = 0.0;
-    // println!("START:");
+    // During the exact frame where either the ungroup action or the OfficialLatch event
+    // takes places, the middle quads do not have time to be despawned before this system runs.
+    // Instead of using this hack (checking whether these events take place), we could
+    // simply use an "if let Some(group) = groups.get_mut(group_handle.id)" statement
+
+    // if latch_event_reader.iter().next().is_none() {
+    //     if !action_event_reader
+    //         .iter()
+    //         .any(|x| x == &Action::Ungroup || x == &Action::Latch)
+    //     {
     if let Some(last_handle_tuple) = groups.iter().next() {
         let mut last_handle_id = last_handle_tuple.0;
+        // println!("mids: {:?}", query.iter().count());
+        let bezier_assets = bezier_curves
+            .iter()
+            .collect::<HashMap<bevy::asset::HandleId, &Bezier>>();
+
         for (mut transform, group_handle, shader_params_handle, GroupMiddleQuad(num_quads)) in
             query.iter_mut()
         {
@@ -100,20 +113,20 @@ pub fn move_group_middle_quads(
 
             let mut shader_params = my_shader_params.get_mut(shader_params_handle).unwrap();
 
-            // println!("groups handle: {:?}", group_handle);
-            let group = groups.get(group_handle).unwrap();
+            if let Some(group) = groups.get(group_handle) {
+                let t_time = (t as f64 + time.seconds_since_startup() * 0.02) % 1.0;
+                shader_params.t = t_time as f32;
+                // println!("time: {:?}", t_time);
 
-            let t_time = (t as f64 + time.seconds_since_startup() * 0.02) % 1.0;
-            shader_params.t = t_time as f32;
-            // println!("time: {:?}", t_time);
+                let pos = group.compute_position_with_bezier(&bezier_assets, t_time);
 
-            let pos = group.compute_position_with_bezier(&bezier_curves, t_time);
-            // let pos = group.compute_position_with_lut(t_time as f32);
-
-            transform.translation.x = pos.x;
-            transform.translation.y = pos.y;
+                let z = transform.translation.z;
+                transform.translation = Vec3::new(pos.x, pos.y, z);
+            }
         }
     }
+    //     }
+    // }
 }
 
 pub fn move_bb_quads(
@@ -122,11 +135,11 @@ pub fn move_bb_quads(
         &mut GlobalTransform,
         &Handle<Bezier>,
         &Handle<Mesh>,
-        &Handle<MyShader>,
+        &Handle<SelectionMat>,
         &BoundingBoxQuad,
     )>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut my_shader_params: ResMut<Assets<MyShader>>,
+    mut my_shader_params: ResMut<Assets<SelectionMat>>,
 ) {
     for (mut transform, bezier_handle, mesh_handle, shader_params_handle, _bbquad) in
         query.iter_mut()
@@ -144,7 +157,12 @@ pub fn move_bb_quads(
         let bb_pos = (bound1 + bound0) / 2.0;
 
         // println!("{:?}, {:?}", bb_size,);
-        transform.translation = bb_pos.extend(transform.translation.z);
+
+        let z = transform.translation().z;
+
+        *transform.translation_mut() = Vec3A::new(bb_pos.x, bb_pos.y, z);
+        // transform.translation = bb_pos.extend(transform.translation.z);
+
         shader_params.size = bigger_size;
 
         // TODO: change the transform scale instead of the mesh
@@ -157,32 +175,55 @@ pub fn move_bb_quads(
 }
 
 pub fn move_end_quads(
+    mut commands: Commands,
     mut bezier_curves: ResMut<Assets<Bezier>>,
-    mut query: Query<(&mut GlobalTransform, &Handle<Bezier>, &EndpointQuad)>,
-    globals: Res<Globals>,
+    mut query: Query<(
+        Entity,
+        &mut Transform,
+        &Handle<Bezier>,
+        &AchorEdgeQuad,
+        &Parent,
+        &MovingAnchor,
+    )>,
+    q_parent: Query<&GlobalTransform, (With<BezierParent>, Without<AchorEdgeQuad>)>,
+    // mut remove_moving_quad_event: EventWriter<RemoveMovingQuadEvent>,
+    // globals: Res<Globals>,
 ) {
-    for (mut transform, bezier_handle, endpoint_quad_id) in query.iter_mut() {
+    for (entity, mut transform, bezier_handle, endpoint_quad_id, parent, moving_quad) in
+        query.iter_mut()
+    {
         //
-        let EndpointQuad(point) = endpoint_quad_id;
+        let AchorEdgeQuad(point) = endpoint_quad_id;
+        // info!("point: {:?}", point);
         //
         // checks whether the transforms are equal to the positions in the Bezier data structure
+
         if let Some(bezier) = bezier_curves.get_mut(bezier_handle) {
+            // TOOD: remove this condition
             if (*point == AnchorEdge::Start
                 && transform.translation.truncate() != bezier.positions.start)
                 || (*point == AnchorEdge::End
                     && transform.translation.truncate() != bezier.positions.end)
             {
+                let parent_global_transform = q_parent.get(**parent).unwrap();
+
                 let ((start_displacement, end_displacement), (start_rotation, end_rotation)) =
-                    bezier.ends_displacement(globals.scale);
+                    bezier.ends_displacement();
 
                 if *point == AnchorEdge::Start {
-                    transform.translation = (bezier.positions.start + start_displacement)
-                        .extend(transform.translation.z);
+                    transform.translation = (bezier.positions.start + start_displacement
+                        - parent_global_transform.translation().truncate())
+                    .extend(transform.translation.z);
                     transform.rotation = start_rotation;
                 } else {
-                    transform.translation =
-                        (bezier.positions.end + end_displacement).extend(transform.translation.z);
+                    transform.translation = (bezier.positions.end + end_displacement
+                        - parent_global_transform.translation().truncate())
+                    .extend(transform.translation.z);
                     transform.rotation = end_rotation;
+                }
+
+                if moving_quad.once {
+                    commands.entity(entity).remove::<MovingAnchor>();
                 }
             }
         }
@@ -190,13 +231,24 @@ pub fn move_end_quads(
 }
 
 pub fn move_control_quads(
+    mut commands: Commands,
     mut bezier_curves: ResMut<Assets<Bezier>>,
-    mut query: Query<(&mut GlobalTransform, &Handle<Bezier>, &ControlPointQuad)>,
+    mut query: Query<(
+        Entity,
+        &mut Transform,
+        &Handle<Bezier>,
+        &ControlPointQuad,
+        &Parent,
+        &MovingAnchor,
+    )>,
+    q_parent: Query<&GlobalTransform, (With<BezierParent>, Without<ControlPointQuad>)>,
 ) {
-    for (mut transform, bezier_handle, ctr_pt_id) in query.iter_mut() {
+    for (entity, mut transform, bezier_handle, ctr_pt_id, parent, moving_quad) in query.iter_mut() {
         let ControlPointQuad(point) = ctr_pt_id;
         //
         if let Some(bezier) = bezier_curves.get_mut(bezier_handle) {
+            let parent_global_transform = q_parent.get(**parent).unwrap().translation();
+
             //
             let (_axis, quad_angle) = transform.rotation.to_axis_angle();
 
@@ -224,10 +276,57 @@ pub fn move_control_quads(
 
             // if the quad's translation and rotation are not equal to the corresponding control point, fix them
             if offset || rotated {
-                transform.translation = control_point.extend(transform.translation.z);
+                // if offset {
+                let z = transform.translation.z;
+                transform.translation =
+                    (control_point - parent_global_transform.truncate()).extend(z);
+                // transform.translation = control_point.extend(transform.translation.z);
                 transform.rotation = Quat::from_rotation_z(bezier_angle_90);
             }
+
+            if moving_quad.once {
+                commands.entity(entity).remove::<MovingAnchor>();
+            }
         }
+    }
+}
+
+// system that moves the fill mesh and the road mesh with mouse
+pub fn move_mesh(
+    cursor: ResMut<Cursor>,
+    mut query: ParamSet<(
+        Query<(
+            &mut Transform,
+            &StartMovingMesh,
+            &Handle<FillMesh2dMaterial>,
+        )>,
+        Query<(
+            &mut Transform,
+            &StartMovingMesh,
+            &Handle<RoadMesh2dMaterial>,
+        )>,
+    )>,
+    mut fill_mesh_materials: ResMut<Assets<FillMesh2dMaterial>>,
+    mut road_mesh_materials: ResMut<Assets<RoadMesh2dMaterial>>,
+) {
+    for (mut transform, start_move, mesh_mat_handle) in query.p0().iter_mut() {
+        //
+        let new_pos = cursor.pos_relative_to_click + start_move.start_position;
+
+        transform.translation = new_pos.extend(transform.translation.z);
+
+        let mut mesh_mat = fill_mesh_materials.get_mut(mesh_mat_handle).unwrap();
+        mesh_mat.center_of_mass = new_pos;
+    }
+
+    for (mut transform, start_move, mesh_mat_handle) in query.p1().iter_mut() {
+        //
+        let new_pos = cursor.pos_relative_to_click + start_move.start_position;
+
+        transform.translation = new_pos.extend(transform.translation.z);
+
+        let mut mesh_mat = road_mesh_materials.get_mut(mesh_mat_handle).unwrap();
+        mesh_mat.center_of_mass = new_pos;
     }
 }
 
@@ -247,22 +346,27 @@ pub fn turn_round_animation(mut query: Query<(&mut Transform, &TurnRoundAnimatio
 pub fn follow_bezier_group(
     mut query: Query<(&mut Transform, &FollowBezierAnimation)>,
     mut visible_query: Query<
-        &mut Visible,
+        &mut Visibility,
         Or<(With<FollowBezierAnimation>, With<TurnRoundAnimation>)>,
     >,
     groups: Res<Assets<Group>>,
-    curves: ResMut<Assets<Bezier>>,
+    curves: Res<Assets<Bezier>>,
     time: Res<Time>,
+    globals: ResMut<Globals>,
 ) {
     if let Some(group) = groups.iter().next() {
         for mut visible in visible_query.iter_mut() {
             visible.is_visible = true;
         }
 
+        let bezier_assets = curves
+            .iter()
+            .collect::<HashMap<bevy::asset::HandleId, &Bezier>>();
+
         for (mut transform, bezier_animation) in query.iter_mut() {
             let path_length = group.1.standalone_lut.path_length as f64;
 
-            let multiplier: f64 = 500.0 / path_length;
+            let multiplier: f64 = 1500.0 / path_length;
             let t_time = (bezier_animation.animation_offset
                 + time.seconds_since_startup() * (0.1 * multiplier))
                 % 1.0;
@@ -271,12 +375,12 @@ pub fn follow_bezier_group(
             let road_line_offset = 4.0;
             let normal = group
                 .1
-                .compute_normal_with_bezier(&curves, t_time as f64)
+                .compute_normal_with_bezier(&bezier_assets, t_time as f64)
                 .normalize();
             pos += normal * road_line_offset;
 
-            transform.translation.x = pos.x;
-            transform.translation.y = pos.y;
+            transform.translation.x = pos.x * globals.scale;
+            transform.translation.y = pos.y * globals.scale;
 
             // the car looks ahead (5% of the curve length) to orient itself
             let further_pos = group
@@ -284,7 +388,10 @@ pub fn follow_bezier_group(
                 .compute_position_with_lut(((t_time + 0.05 * multiplier) % 1.0) as f32);
             let further_normal = group
                 .1
-                .compute_normal_with_bezier(&curves, ((t_time + 0.05 * multiplier) % 1.0) as f64)
+                .compute_normal_with_bezier(
+                    &bezier_assets,
+                    ((t_time + 0.05 * multiplier) % 1.0) as f64,
+                )
                 .normalize();
 
             let forward_direction =
